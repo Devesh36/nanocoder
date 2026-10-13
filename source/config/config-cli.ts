@@ -8,6 +8,7 @@
  */
 
 import {basename} from 'node:path';
+import stringWidth from 'string-width';
 import {
 	type EffectiveConfig,
 	type EffectiveConfigEntry,
@@ -48,6 +49,7 @@ Examples:
   nanocoder config diff --json`;
 
 const MAX_VALUE_WIDTH = 60;
+const graphemes = new Intl.Segmenter();
 
 /** Render a resolved value as a single line, truncated for table use. */
 function formatValue(value: unknown, maxWidth = MAX_VALUE_WIDTH): string {
@@ -55,9 +57,18 @@ function formatValue(value: unknown, maxWidth = MAX_VALUE_WIDTH): string {
 	const text = typeof value === 'string' ? value : JSON.stringify(value);
 	if (text === undefined) return '(unset)';
 	const oneLine = text.replace(/\s+/g, ' ');
-	return oneLine.length > maxWidth
-		? `${oneLine.slice(0, maxWidth - 1)}…`
-		: oneLine;
+	if (stringWidth(oneLine) <= maxWidth) return oneLine;
+
+	// Slice whole graphemes within the terminal budget, including the ellipsis.
+	let prefix = '';
+	let columns = 0;
+	for (const {segment} of graphemes.segment(oneLine)) {
+		const width = stringWidth(segment);
+		if (columns + width > maxWidth - 1) break;
+		prefix += segment;
+		columns += width;
+	}
+	return `${prefix}…`;
 }
 
 /** Short label for the SOURCE column; full paths live in the layer header. */
@@ -68,12 +79,16 @@ function shortOrigin(origin: string): string {
 }
 
 function pad(text: string, width: number): string {
-	return text.length >= width ? text : text + ' '.repeat(width - text.length);
+	const columns = stringWidth(text);
+	return columns >= width ? text : text + ' '.repeat(width - columns);
 }
 
 function renderTable(rows: string[][], headers: string[]): string[] {
 	const widths = headers.map((header, index) =>
-		Math.max(header.length, ...rows.map(row => (row[index] ?? '').length)),
+		Math.max(
+			stringWidth(header),
+			...rows.map(row => stringWidth(row[index] ?? '')),
+		),
 	);
 	const line = (cells: string[]) =>
 		cells
