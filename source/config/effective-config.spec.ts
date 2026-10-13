@@ -8,6 +8,7 @@ import {
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import test from 'ava';
+import stringWidth from 'string-width';
 import {runConfigCli} from './config-cli';
 import {
 	type EffectiveConfig,
@@ -583,6 +584,60 @@ test('runConfigCli renders list, show, and diff', t => {
 		t.is(diff.exitCode, 0);
 		t.regex(diff.output, /Overrides in effect/);
 	});
+});
+
+test('config list and diff align columns for Unicode provider names', t => {
+	const providers = (baseUrl: string) =>
+		['中文助手', 'ascii'].map(name => ({name, baseUrl, models: ['small']}));
+	withFixture(
+		{
+			projectAgents: {providers: providers('http://localhost:11434/v1')},
+			globalAgents: {providers: providers('http://localhost:1234/v1')},
+		},
+		() => {
+			for (const command of ['list', 'diff']) {
+				const result = runConfigCli(command);
+				t.is(result.exitCode, 0);
+				const rows = result.output
+					.split('\n')
+					.filter(
+						line =>
+							line.trimStart().startsWith('nanocoder.providers.') &&
+							line.includes('  project  '),
+					);
+				t.is(rows.length, 2);
+				const columns = rows.map(row => {
+					const layer = row.indexOf('  project  ');
+					t.true(layer !== -1);
+					return stringWidth(row.slice(0, layer));
+				});
+				t.is(columns[0], columns[1], `${command}: ${rows.join('\n')}`);
+			}
+		},
+	);
+});
+
+test('config list truncates values by terminal columns without splitting emoji', t => {
+	for (const content of [
+		'界'.repeat(40),
+		`${'a'.repeat(58)}👩‍💻tail`,
+		`${'a'.repeat(57)}👩‍💻tail`,
+	]) {
+		withFixture({projectAgents: {nanocoder: {systemPrompt: {content}}}}, () => {
+			const result = runConfigCli('list');
+			const row = result.output
+				.split('\n')
+				.find(line => line.startsWith('nanocoder.systemPrompt'));
+			t.truthy(row);
+			const value = row!.split(/ {2,}/)[1];
+			t.true(stringWidth(value) <= 60, `value is too wide: ${value}`);
+			t.true(value.endsWith('…'));
+			t.false(/\p{Surrogate}/u.test(value), 'truncation must preserve Unicode');
+			if (content.startsWith(`${'a'.repeat(57)}👩‍💻`)) {
+				t.true(value.includes('👩‍💻'), 'keep a whole emoji when it fits');
+			}
+		});
+	}
 });
 
 test('runConfigCli reports an unknown key and a bad subcommand', t => {
